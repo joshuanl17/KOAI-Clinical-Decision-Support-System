@@ -1,17 +1,51 @@
 import streamlit as st
 import google.generativeai as genai
+import os
+import time
 
 # 1. Konfigurasi Halaman & AI
 st.set_page_config(page_title="KOAI - Asisten Klinis", page_icon="🩺", layout="wide")
 
 try:
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-    model = genai.GenerativeModel('gemini-1.5-pro')
+    # PERBAIKAN ERROR MERAH: Menggunakan nama model yang lebih spesifik
+    model = genai.GenerativeModel('gemini-1.5-pro-latest')
 except Exception as e:
     st.error("⚠️ Kunci API belum dipasang di pengaturan Secrets Streamlit!")
     st.stop()
 
-# 2. Antarmuka UI
+# 2. SIDEBAR KHUSUS UNTUK UNGGAH PDF (Solusi Peringatan Kuning)
+with st.sidebar:
+    st.header("📚 Brankas Referensi")
+    st.info("Unggah PDF Pedoman Klinis (PPK) di sini. AI akan membaca isinya untuk menjawab kasus.")
+    uploaded_files = st.file_uploader("Pilih file PDF", type=["pdf"], accept_multiple_files=True)
+    
+    pdf_gemini_list = []
+    if uploaded_files:
+        for file in uploaded_files:
+            temp_path = file.name
+            # Simpan sementara
+            with open(temp_path, "wb") as f:
+                f.write(file.getbuffer())
+            
+            with st.spinner(f"Memproses {file.name}..."):
+                try:
+                    # Unggah langsung ke otak Gemini
+                    gemini_file = genai.upload_file(temp_path)
+                    # Tunggu AI selesai membaca dokumen
+                    while gemini_file.state.name == "PROCESSING":
+                        time.sleep(2)
+                        gemini_file = genai.get_file(gemini_file.name)
+                    pdf_gemini_list.append(gemini_file)
+                    st.success(f"✅ {file.name} terbaca!")
+                except Exception as e:
+                    st.error(f"Gagal memproses file: {e}")
+            
+            # Hapus file sementara dari memori
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+
+# 3. Antarmuka UI (Formulir Pasien)
 st.title("🩺 KOAI: Asisten Klinis (CDSS)")
 st.markdown("Sistem Pendukung Keputusan Klinis 100% Berbasis Pedoman Lokal")
 
@@ -51,16 +85,13 @@ with st.form("form_pasien"):
     
     submitted = st.form_submit_button("Analisis Pasien", type="primary", use_container_width=True)
 
-# 3. Logika Pemrosesan AI
+# 4. Logika Pemrosesan AI
 if submitted:
     if not keluhan_utama:
         st.warning("Mohon isi Keluhan Utama pasien terlebih dahulu.")
     else:
-        with st.spinner("🧠 KOAI sedang membaca dokumen referensi Anda dan menganalisis data klinis..."):
+        with st.spinner("🧠 KOAI sedang menganalisis data klinis..."):
             try:
-                # Menarik dokumen PDF yang sudah Anda unggah di Google AI Studio
-                daftar_referensi = list(genai.list_files())
-                
                 prompt_medis = f"""
                 Anda adalah KOAI, Clinical Decision Support System (CDSS) untuk dokter umum internship di IGD/Poli.
                 
@@ -88,11 +119,11 @@ if submitted:
                 
                 # Menggabungkan data pasien dengan tumpukan PDF referensi Anda
                 konten_analisis = [prompt_medis]
-                if daftar_referensi:
-                    konten_analisis.extend(daftar_referensi)
-                    st.info(f"📚 Membaca {len(daftar_referensi)} dokumen referensi medis dari brankas Anda...")
+                if pdf_gemini_list:
+                    konten_analisis.extend(pdf_gemini_list)
+                    st.info(f"📚 Merujuk pada {len(pdf_gemini_list)} dokumen referensi medis dari brankas Anda...")
                 else:
-                    st.warning("⚠️ Belum ada referensi PDF yang ditemukan. AI akan murni menggunakan pengetahuan bawaannya.")
+                    st.warning("⚠️ Anda belum mengunggah referensi PDF di menu sebelah kiri. AI murni menggunakan pengetahuan bawaannya.")
                 
                 # Mengirimkan data ke AI
                 respon = model.generate_content(konten_analisis)
